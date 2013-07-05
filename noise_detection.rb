@@ -19,6 +19,7 @@
 
 require 'getoptlong'
 require 'optparse'
+require 'net/smtp'
 
 HW_DETECTION_CMD = "cat /proc/asound/cards"
 # You need to replace MICROPHONE with the name of your microphone, as reported
@@ -26,6 +27,7 @@ HW_DETECTION_CMD = "cat /proc/asound/cards"
 SAMPLE_DURATION = 5 # seconds
 FORMAT = 'S16_LE'   # this is the format that my USB microphone generates
 THRESHOLD = 0.05
+RECORD_FILENAME='/tmp/noise.wav'
 
 
 def check_required()
@@ -59,6 +61,9 @@ optparse = OptionParser.new do |opts|
   end
   opts.on("-n", "--threshold NOISE_THRESHOLD", "Set Activation noise Threshold. EX. 0.1") do |n|
     options[:threshold] = n
+  end
+  opts.on("-e", "--email DEST_EMAIL", "Alert destination email") do |e|
+    options[:email] = e
   end
   opts.on("-v", "--[no-]verbose", "Run verbosely") do |v|
     options[:verbose] = v
@@ -98,6 +103,7 @@ optparse.parse!
 
 #Now raise an exception if we have not found a host option
 raise OptionParser::MissingArgument if options[:microphone].nil?
+raise OptionParser::MissingArgument if options[:email].nil?
 
 if options[:verbose]
    puts "Script parameters configurations:"
@@ -105,17 +111,69 @@ if options[:verbose]
    puts "Sample Duration: #{SAMPLE_DURATION}"
    puts "Output Format: #{FORMAT}"
    puts "Noise Threshold: #{THRESHOLD}"
+   puts "Record filename (overwritten): #{RECORD_FILENAME}"
+   puts "Destination email: #{options[:email]}"
 end
 
 loop do
-  out = `/usr/bin/arecord -D plughw:#{options[:microphone]},0 -d #{SAMPLE_DURATION} -f #{FORMAT} 2>/dev/null | /usr/bin/sox -t .wav - -n stat 2>&1`
+  rec_out = `/usr/bin/arecord -D plughw:#{options[:microphone]},0 -d #{SAMPLE_DURATION} -f #{FORMAT} #{RECORD_FILENAME} 2>/dev/null`
+  out = `/usr/bin/sox -t .wav #{RECORD_FILENAME} -n stat 2>&1`
   out.match(/Maximum amplitude:\s+(.*)/m)
   amplitude = $1.to_f
   puts amplitude if options[:verbose]
   if amplitude > THRESHOLD
-    # You need to replace this with the program you wish to run
-    # system "echo 'detected sound!'"
     puts "Sound detected!!!"
+
+	# Read a file and encode it into base64 format
+	filecontent = File.read(RECORD_FILENAME)
+	encodedcontent = [filecontent].pack("m")   # base64
+
+	marker = "AUNIQUEMARKER"
+
+	body =<<EOF
+This is a test email to send an attachement.
+EOF
+
+	# Define the main headers.
+	part1 =<<EOF
+From: NoiseDetector <home@mornati.net>
+To: #{options[:email]} <#{options[:email]}>
+Subject: Sending Attachement
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=#{marker}
+--#{marker}
+EOF
+
+	# Define the message action
+	part2 =<<EOF
+Content-Type: text/plain
+Content-Transfer-Encoding:8bit
+
+#{body}
+--#{marker}
+EOF
+
+	# Define the attachment section
+	part3 =<<EOF
+Content-Type: multipart/mixed; name=\"noise.wav\"
+Content-Transfer-Encoding:base64
+Content-Disposition: attachment; filename="noise.wav"
+
+#{encodedcontent}
+--#{marker}--
+EOF
+
+	mailtext = part1 + part2 + part3
+
+	# Let's put our code in safe area
+	begin 
+	  Net::SMTP.start('localhost') do |smtp|
+	     smtp.sendmail(mailtext, 'home@mornati.net',
+		                  ["#{options[:email]}"])
+	  end
+	rescue Exception => e  
+	  print "Exception occured: " + e  
+	end  
   else
     puts "no sound"
   end
