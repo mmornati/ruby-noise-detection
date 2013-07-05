@@ -1,0 +1,110 @@
+#!/bin/sh
+#
+# noised   Noise detection and alert
+#
+# chkconfig:    - 24 76
+#
+# description: This script allow you to detect noise using your computer
+#              microphone and send an email alert to you. 
+#
+### BEGIN INIT INFO
+# Provides:          noised
+# Required-Start:    $remote_fs
+# Required-Stop:     $remote_fs
+# Short-Description: Start daemon at boot time
+# Description:       Enable service provided by daemon.
+### END INIT INFO
+
+noisefile="/usr/sbin/noise_detection.rb"
+pidfile="/var/run/noise_detection.pid"
+if [ -d /var/lock/subsys ]; then
+    # RedHat/CentOS/etc who use subsys
+    lockfile="/var/lock/subsys/noise_detection"
+else
+    # The rest of them
+    lockfile="/var/lock/noise_detection"
+fi
+
+# Check that binary exists
+if ! [ -f $noisefile ]; then
+    echo "noise_detection binary not found"
+    exit 5
+fi
+
+# Source function library.
+. /etc/init.d/functions
+
+if [ -f /home/mmornati/projects/ruby-noise-detection/sysconfig/noised ]; then
+    . /home/mmornati/projects/ruby-noise-detection/sysconfig/noised
+fi
+
+echo $SOUND_CARD
+
+# Determine if we can use the -p option to daemon, killproc, and status.
+# RHEL < 5 can't.
+if status | grep -q -- '-p' 2>/dev/null; then
+    daemonopts="--pidfile $pidfile"
+    pidopts="-p $pidfile"
+fi
+
+start() {
+    echo -n "Starting noise detector: "
+    # Only try to start if not already started
+    if ! rh_status_q; then
+      daemon ${daemonopts} ${noisefile} -m $SOUND_CARD
+    fi
+    # This will be 0 if script is already running
+    RETVAL=$?
+    echo
+    [ $RETVAL -eq 0 ] && touch ${lockfile}
+    return $RETVAL
+}
+
+stop() {
+    echo -n "Shutting down noise detector: "
+    # If running, try to stop it
+    if rh_status_q; then
+      killproc ${pidopts} -d 10 ${noisefile}
+    else
+      # Non-zero status either means lockfile and pidfile need cleanup (1 and 2)
+      # or the process is already stopped (3), so we can just call true to
+      # trigger the cleanup that happens below.
+      true
+    fi
+    RETVAL=$?
+    echo
+    [ $RETVAL = 0 ] && rm -f ${lockfile} ${pidfile}
+    return $RETVAL
+}
+
+restart() {
+    stop
+    start
+}
+
+rh_status() {
+    status ${pidopts} ${noisefile}
+    RETVAL=$?
+    return $RETVAL
+}
+
+# See how we were called.
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    status)
+        rh_status
+        ;;
+    *)
+        echo "Usage: noised {start|stop|restart|status}"
+        RETVAL=2
+        ;;
+esac
+exit $RETVAL
