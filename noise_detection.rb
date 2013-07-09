@@ -20,6 +20,9 @@
 require 'getoptlong'
 require 'optparse'
 require 'net/smtp'
+require 'logger'
+require 'date'
+
 
 HW_DETECTION_CMD = "cat /proc/asound/cards"
 # You need to replace MICROPHONE with the name of your microphone, as reported
@@ -28,9 +31,16 @@ SAMPLE_DURATION = 5 # seconds
 FORMAT = 'S16_LE'   # this is the format that my USB microphone generates
 THRESHOLD = 0.05
 RECORD_FILENAME='/tmp/noise.wav'
+LOG_FILE='/var/log/noise_detector.log'
+PID_FILE='/etc/noised/noised.pid'
+
+logger = Logger.new(LOG_FILE)
+logger.level = Logger::DEBUG
+
+logger.info("Noise detector started @ #{DateTime.now.strftime('%d/%m/%Y %H:%M:%S')}")
 
 
-def check_required()
+def self.check_required()
   if !File.exists?('/usr/bin/arecord')
     warn "/usr/bin/arecord not found; install package alsa-utils"
     exit 1
@@ -74,7 +84,24 @@ optparse = OptionParser.new do |opts|
   opts.on("-t", "--test SOUND_CARD_ID", "Test soundcard with the given id") do |t|
     options[:test] = t
   end
+  opts.on("-k", "--kill", "Terminating background script") do |k|
+    options[:kill] = k
+  end
 end.parse!
+
+if options[:kill]
+  logger.info("Terminating script");
+  logger.debug("Looking for pid file in #{PID_FILE}")
+  begin
+    pidfile = File.open(PID_FILE, "r")
+    storedpid = pidfile.read
+    Process.kill("TERM", Integer(storedpid))
+  rescue Exception => e
+    logger.error("Cannot read pid file: " + e.message)
+    exit 1
+  end
+  exit 0
+end
 
 if options[:detection]
     puts "Detecting your soundcard..."
@@ -85,18 +112,18 @@ end
 #Check required binaries
 check_required()
 
-if options[:test]
-    puts "Testing soundcard..."
-    puts `/usr/bin/arecord -D plughw:#{options[:test]},0 -d 1 -f #{FORMAT} 2>/dev/null | /usr/bin/sox -t .wav - -n stat 2>&1`
-    exit 0
-end
-
 if options[:sample]
     SAMPLE_DURATION = options[:sample]
 end
 
 if options[:threshold]
     THRESHOLD = options[:threshold].to_f
+end
+
+if options[:test]
+    puts "Testing soundcard..."
+    puts `/usr/bin/arecord -D plughw:#{options[:test]},0 -d #{SAMPLE_DURATION} -f #{FORMAT} 2>/dev/null | /usr/bin/sox -t .wav - -n stat 2>&1`
+    exit 0
 end
 
 optparse.parse!
@@ -106,36 +133,52 @@ raise OptionParser::MissingArgument if options[:microphone].nil?
 raise OptionParser::MissingArgument if options[:email].nil?
 
 if options[:verbose]
-   puts "Script parameters configurations:"
-   puts "SoundCard ID: #{options[:microphone]}"
-   puts "Sample Duration: #{SAMPLE_DURATION}"
-   puts "Output Format: #{FORMAT}"
-   puts "Noise Threshold: #{THRESHOLD}"
-   puts "Record filename (overwritten): #{RECORD_FILENAME}"
-   puts "Destination email: #{options[:email]}"
+   logger.debug("Script parameters configurations:")
+   logger.debug("SoundCard ID: #{options[:microphone]}")
+   logger.debug("Sample Duration: #{SAMPLE_DURATION}")
+   logger.debug("Output Format: #{FORMAT}")
+   logger.debug("Noise Threshold: #{THRESHOLD}")
+   logger.debug("Record filename (overwritten): #{RECORD_FILENAME}")
+   logger.debug("Destination email: #{options[:email]}")
 end
 
-loop do
-  rec_out = `/usr/bin/arecord -D plughw:#{options[:microphone]},0 -d #{SAMPLE_DURATION} -f #{FORMAT} #{RECORD_FILENAME} 2>/dev/null`
-  out = `/usr/bin/sox -t .wav #{RECORD_FILENAME} -n stat 2>&1`
-  out.match(/Maximum amplitude:\s+(.*)/m)
-  amplitude = $1.to_f
-  puts amplitude if options[:verbose]
-  if amplitude > THRESHOLD
-    puts "Sound detected!!!"
+#Starting script part
+pid = fork do
+  stop_process = false
+  Signal.trap("USR1") do
+    logger.debug("Running...")
+  end
+  Signal.trap("TERM") do
+    logger.info("Terminating...")
+    File.delete(PID_FILE)
+    stop_process = true 
+  end
 
-	# Read a file and encode it into base64 format
-	filecontent = File.read(RECORD_FILENAME)
-	encodedcontent = [filecontent].pack("m")   # base64
-
-	marker = "AUNIQUEMARKER"
-
-	body =<<EOF
+  loop do
+    if (stop_process)
+	logger.info("Noise detector stopped @ #{DateTime.now.strftime('%d/%m/%Y %H:%M:%S')}")	
+	break
+    end
+    rec_out = `/usr/bin/arecord -D plughw:#{options[:microphone]},0 -d #{SAMPLE_DURATION} -f #{FORMAT} #{RECORD_FILENAME} 2>/dev/null`
+    out = `/usr/bin/sox -t .wav #{RECORD_FILENAME} -n stat 2>&1`
+    out.match(/Maximum amplitude:\s+(.*)/m)
+    amplitude = $1.to_f
+    logger.debug("Detected amplitude: #{amplitude}") if options[:verbose]
+    if amplitude > THRESHOLD
+      logger.info("Sound detected!!!")
+  
+  	# Read a file and encode it into base64 format
+  	filecontent = File.read(RECORD_FILENAME)
+  	encodedcontent = [filecontent].pack("m")   # base64
+  
+  	marker = "AUNIQUEMARKER"
+  
+  	body =<<EOF
 This is a test email to send an attachement.
 EOF
-
-	# Define the main headers.
-	part1 =<<EOF
+  
+    # Define the main headers.
+    part1 =<<EOF
 From: NoiseDetector <home@mornati.net>
 To: #{options[:email]} <#{options[:email]}>
 Subject: Sending Attachement
@@ -143,38 +186,43 @@ MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary=#{marker}
 --#{marker}
 EOF
-
-	# Define the message action
-	part2 =<<EOF
+  
+  	# Define the message action
+  	part2 =<<EOF
 Content-Type: text/plain
 Content-Transfer-Encoding:8bit
-
+  
 #{body}
 --#{marker}
 EOF
-
-	# Define the attachment section
-	part3 =<<EOF
+  
+  	# Define the attachment section
+  	part3 =<<EOF
 Content-Type: multipart/mixed; name=\"noise.wav\"
 Content-Transfer-Encoding:base64
 Content-Disposition: attachment; filename="noise.wav"
-
+  
 #{encodedcontent}
 --#{marker}--
 EOF
+  
+    mailtext = part1 + part2 + part3
 
-	mailtext = part1 + part2 + part3
-
-	# Let's put our code in safe area
-	begin 
-	  Net::SMTP.start('localhost') do |smtp|
-	     smtp.sendmail(mailtext, 'home@mornati.net',
-		                  ["#{options[:email]}"])
-	  end
-	rescue Exception => e  
-	  print "Exception occured: " + e  
-	end  
-  else
-    puts "no sound"
-  end
+    # Let's put our code in safe area
+    begin 
+      Net::SMTP.start('localhost') do |smtp|
+         smtp.sendmail(mailtext, 'home@mornati.net',
+    	                  ["#{options[:email]}"])
+      end
+    rescue Exception => e  
+      logger.error("Exception occured: " + e) 
+    end  
+    else
+      logger.debug("No sound detected...")
+    end
 end
+end
+
+Process.detach(pid)
+logger.debug("Started... (#{pid})")
+File.open(PID_FILE, "w") { |file| file.write(pid) }
