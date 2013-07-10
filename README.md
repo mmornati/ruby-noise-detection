@@ -3,6 +3,30 @@ ruby-noise-detection
 
 Noise Detection Ruby Script
 
+Installation
+------------
+The noise dector ruby script uses two linux tool to record and analyse de
+output: **sox** and **arecord**.
+So you need to install these packages on your raspberrypi (or other linux
+system):
+
+```bash
+sudo apt-get install sox alsa-utils
+```
+
+Then, in the current version, the script does not accept parameters to change
+file location (log, tmp recording and pid file), so you need to allow the script
+execution user (**pi** for example) the write access to these files and folders:
+
+```
+RECORD_FILENAME='/tmp/noise.wav'
+LOG_FILE='/var/log/noise_detector.log'
+PID_FILE='/etc/noised/noised.pid'
+```
+
+or you can edit the script changin these variables values with what you prefer
+for your system.
+
 Detect Audio Card
 -----------------
 

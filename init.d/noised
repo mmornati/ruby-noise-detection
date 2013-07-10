@@ -34,8 +34,8 @@ fi
 # Source function library.
 . /etc/init.d/functions
 
-if [ -f /home/mmornati/projects/ruby-noise-detection/sysconfig/noised ]; then
-    . /home/mmornati/projects/ruby-noise-detection/sysconfig/noised
+if [ -f /etc/sysconfig/noised ]; then
+    . /etc/sysconfig/noised
 fi
 
 echo $SOUND_CARD
