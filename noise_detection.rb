@@ -159,7 +159,7 @@ pid = fork do
 	logger.info("Noise detector stopped @ #{DateTime.now.strftime('%d/%m/%Y %H:%M:%S')}")	
 	break
     end
-    rec_out = `/usr/bin/arecord -D plughw:#{options[:microphone]},0 -d #{SAMPLE_DURATION} -f #{FORMAT} #{RECORD_FILENAME} 2>/dev/null`
+    rec_out = `/usr/bin/arecord -D plughw:#{options[:microphone]},0 -d #{SAMPLE_DURATION} -f #{FORMAT} -t wav #{RECORD_FILENAME} 2>/dev/null`
     out = `/usr/bin/sox -t .wav #{RECORD_FILENAME} -n stat 2>&1`
     out.match(/Maximum amplitude:\s+(.*)/m)
     amplitude = $1.to_f
@@ -167,56 +167,19 @@ pid = fork do
     if amplitude > THRESHOLD
       logger.info("Sound detected!!!")
   
-  	# Read a file and encode it into base64 format
-  	filecontent = File.read(RECORD_FILENAME)
-  	encodedcontent = [filecontent].pack("m")   # base64
-  
-  	marker = "AUNIQUEMARKER"
-  
-  	body =<<EOF
-This is a test email to send an attachement.
-EOF
-  
-    # Define the main headers.
-    part1 =<<EOF
-From: NoiseDetector <home@mornati.net>
-To: #{options[:email]} <#{options[:email]}>
-Subject: Sending Attachement
-MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary=#{marker}
---#{marker}
-EOF
-  
-  	# Define the message action
-  	part2 =<<EOF
-Content-Type: text/plain
-Content-Transfer-Encoding:8bit
-  
-#{body}
---#{marker}
-EOF
-  
-  	# Define the attachment section
-  	part3 =<<EOF
-Content-Type: multipart/mixed; name=\"noise.wav\"
+  	# Read a file
+	filecontent = File.open(RECORD_FILENAME ,"rb") {|io| io.read}
+ 	
+        encoded = [filecontent].pack("m")    # base64 econding
+puts  value = %x[/usr/sbin/sendmail #{options[:email]} << EOF
+subject: WARNING: Noise Detected
+from: home@mornati.net
+Content-Description: "noise.wav"
+Content-Type: audio/x-wav; name="noise.wav"
 Content-Transfer-Encoding:base64
 Content-Disposition: attachment; filename="noise.wav"
-  
-#{encodedcontent}
---#{marker}--
-EOF
-  
-    mailtext = part1 + part2 + part3
-
-    # Let's put our code in safe area
-    begin 
-      Net::SMTP.start('localhost') do |smtp|
-         smtp.sendmail(mailtext, 'home@mornati.net',
-    	                  ["#{options[:email]}"])
-      end
-    rescue Exception => e  
-      logger.error("Exception occured: " + e) 
-    end  
+#{encoded}
+EOF] 
     else
       logger.debug("No sound detected...")
     end
