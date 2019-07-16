@@ -17,7 +17,6 @@
 # This program detects the presence of sound and invokes a program.
 #
 
-require 'getoptlong'
 require 'optparse'
 require 'net/smtp'
 require 'logger'
